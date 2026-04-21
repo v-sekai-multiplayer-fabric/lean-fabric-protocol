@@ -9,7 +9,7 @@ import PredictiveBVH.Relativistic.NoGod
 -- clz30 is defined in Types.lean now
 
 -- ============================================================================
--- SHARED-NOTHING FABRIC: Morton-partitioned zones with STAGING migration
+-- SHARED-NOTHING FABRIC: Hilbert-partitioned zones with STAGING migration
 --
 -- Terminology:
 --   Zone  = a single server process owning a spatial partition (= FabricZone in C++)
@@ -17,13 +17,16 @@ import PredictiveBVH.Relativistic.NoGod
 --
 -- Zone count is DYNAMIC: scales with entity count and spatial distribution.
 -- With r128 fixed-point we can handle galaxy-scale coordinates, so zones
--- partition the 30-bit Morton code space adaptively based on entity density.
+-- partition the 30-bit Hilbert code space adaptively based on entity density.
+-- Codes are computed by hilbertOfBox (Skilling 2004); the span structure is
+-- named MortonSpan for historical reasons but stores Hilbert code ranges.
 --
--- Entity-to-zone assignment: 30-bit Morton code prefix (O(1) per entity).
+-- Entity-to-zone assignment: 30-bit Hilbert code prefix (O(1) per entity).
 --
--- Migration protocol (CockroachDB-style parallel commits):
---   OWNED(A) → STAGING(A,B) → OWNED(B)
--- During STAGING, both zones hold a valid ghost snap.
+-- Migration protocol (three-state):
+--   owned → staging(targetZone, arrivalHLC) → owned
+--   incoming(fromZone) advances to owned on the receiving side.
+-- During staging, both zones hold a valid ghost snap.
 -- ============================================================================
 
 /-- Compute optimal zone count based on entity count and target entities per zone.
@@ -32,14 +35,14 @@ import PredictiveBVH.Relativistic.NoGod
 def computeOptimalZoneCount (entityCount : Nat) (targetPerZone : Nat := 2500) : Nat :=
   max 1 ((entityCount + targetPerZone - 1) / targetPerZone)
 
-/-- Compute Morton prefix depth for given zone count.
+/-- Compute Hilbert prefix depth for given zone count.
     For N zones, we need ⌈log₂(N)⌉ prefix bits.
-    With 30-bit Morton codes, max zones = 2^30 ≈ 1 billion. -/
+    With 30-bit Hilbert codes, max zones = 2^30 ≈ 1 billion. -/
 def zonePrefixDepth (zoneCount : Nat) : Nat :=
   if zoneCount ≤ 1 then 0
   else 30 - clz30 (zoneCount - 1)
 
-/-- Maximum zones supported with 30-bit Morton codes. -/
+/-- Maximum zones supported with 30-bit Hilbert codes. -/
 theorem maxZoneCount : (1 <<< 30) = 1073741824 := by rfl
 
 -- ── Migration state machine ──────────────────────────────────────────────────
@@ -65,38 +68,39 @@ def FabricLatency.toTicks : FabricLatency → Nat
   | .crossRegion => 4
   | .satellite   => 40
 
--- ── Morton span ──────────────────────────────────────────────────────────────
+-- ── Hilbert span (struct named MortonSpan for historical reasons) ────────────
 
-/-- A contiguous Morton-code interval [lo, hi] (inclusive) representing a zone's
-    coverage of the 30-bit Morton space.  Zone i with prefixDepth d owns exactly
+/-- A contiguous Hilbert-code interval [lo, hi] (inclusive) representing a zone's
+    coverage of the 30-bit Hilbert space.  Zone i with prefixDepth d owns exactly
     the codes whose top-d bits equal i, i.e. [i·2^(30-d), (i+1)·2^(30-d) − 1].
+    Codes are computed by hilbertOfBox (Skilling 2004).
     Spans are disjoint across zones and together tile all 2^30 codes. -/
 structure MortonSpan where
   lo : Nat   -- inclusive lower bound
   hi : Nat   -- inclusive upper bound
   deriving Inhabited, Repr
 
-/-- Number of distinct Morton codes in one zone given prefixDepth prefix bits.
+/-- Number of distinct Hilbert codes in one zone given prefixDepth prefix bits.
     = 2^(30 − prefixDepth).  For 112 zones (prefixDepth = 7): width = 2^23 ≈ 8M codes. -/
 def mortonSpanWidth (prefixDepth : Nat) : Nat :=
   1 <<< (30 - min prefixDepth 30)
 
-/-- Morton span for zone index `zoneIdx` given `prefixDepth` prefix bits. -/
+/-- Hilbert code span for zone index `zoneIdx` given `prefixDepth` prefix bits. -/
 def zoneMortonSpan (zoneIdx prefixDepth : Nat) : MortonSpan :=
   let w := mortonSpanWidth prefixDepth
   { lo := zoneIdx * w
     hi := zoneIdx * w + w - 1 }
 
-/-- Morton span for zone `i` derived from the zones array size.
-    Use this to log or inspect which Morton codes zone i owns. -/
+/-- Hilbert code span for zone `i` derived from the zones array size.
+    Use this to log or inspect which Hilbert codes zone i owns. -/
 def zoneSpan (zones : Array ZoneState) (i : Nat) : MortonSpan :=
   zoneMortonSpan i (zonePrefixDepth zones.size)
 
-/-- True when Morton code `c` falls inside span `s`. -/
+/-- True when Hilbert code `c` falls inside span `s`. -/
 def MortonSpan.contains (s : MortonSpan) (c : Nat) : Bool :=
   s.lo ≤ c && c ≤ s.hi
 
-/-- True when two spans share at least one Morton code. -/
+/-- True when two spans share at least one Hilbert code. -/
 def MortonSpan.overlaps (a b : MortonSpan) : Bool :=
   a.lo ≤ b.hi && b.lo ≤ a.hi
 
@@ -153,7 +157,7 @@ structure ZoneState where
 
 -- ── Zone assignment ───────────────────────────────────────────────────────────
 
-/-- Assign an entity to a zone using 30-bit Morton-code prefix.
+/-- Assign an entity to a zone using 30-bit Hilbert-code prefix.
     Uses prefix-based assignment: zone = (code >>> (30 - prefixDepth))
     where prefixDepth = ⌈log₂(zoneCount)⌉.
     This scales from 1 zone to 2^30 zones (≈1 billion) for galaxy-scale scenes. -/
