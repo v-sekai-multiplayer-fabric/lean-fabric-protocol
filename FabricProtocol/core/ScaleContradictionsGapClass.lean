@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
-import PredictiveBVH.Spatial.ScaleContradictions
+import PredictiveBvh.core.ScaleContradictions
 
 -- ============================================================================
 -- ADVERSARIAL GAP CLASSES C1–C7

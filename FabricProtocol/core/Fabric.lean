@@ -1,9 +1,9 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
-import PredictiveBVH.Primitives.Types
-import PredictiveBVH.Spatial.HilbertBroadphase
-import PredictiveBVH.Relativistic.NoGod
+import Shared.Types
+import PredictiveBvh.core.HilbertBroadphase
+import Rebac.core.NoGod
 
 open PredictiveBVH.Relativistic
 

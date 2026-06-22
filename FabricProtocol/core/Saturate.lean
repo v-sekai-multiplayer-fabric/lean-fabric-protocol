@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
-import PredictiveBVH.Primitives.Types
-import PredictiveBVH.Spatial.Partition
+import Shared.Types
+import PredictiveBvh.core.Partition
 
 -- ============================================================================
 -- E-GRAPH SATURATION
